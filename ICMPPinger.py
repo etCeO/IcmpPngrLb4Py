@@ -8,19 +8,19 @@ import binascii
 
 ICMP_ECHO_REQUEST = 8
 
-def checksum(string):
+def checksum(source_string):
     csum = 0
-    countTo = (len(string) // 2) * 2
+    countTo = (len(source_string) // 2) * 2
     count = 0
 
     while count < countTo:
-        thisVal = ord(string[count+1]) * 256 + ord(string[count])
+        thisVal = source_string[count + 1] * 256 + source_string[count]
         csum = csum + thisVal
         csum = csum & 0xffffffff
         count = count + 2
 
-    if countTo < len(string):
-        csum = csum + ord(string[len(string) - 1])
+    if countTo < len(source_string):
+        csum = csum + source_string[len(source_string) - 1]
         csum = csum & 0xffffffff
 
     csum = (csum >> 16) + (csum & 0xffff)
@@ -36,24 +36,39 @@ def receiveOnePing(mySocket, ID, timeout, destAddr):
     while 1:
         startedSelect = time.time()
         whatReady = select.select([mySocket], [], [], timeLeft)
-        howLongInSelect = (time.time() - startedSelect)
-        if whatReady[0] == []: # Timeout
+        howLongInSelect = time.time() - startedSelect
+
+        if whatReady[0] == []:  # Timeout
             return "Request timed out."
         
         timeReceived = time.time()
         recPacket, addr = mySocket.recvfrom(1024)
 
-        #Fetch the ICMP header from the IP packet
-        icmpHeader = recPacket[20:28]
-        type, code, checksum, packetID, sequence = struct.unpack("bbHHh", icmpHeader)
+        # Extract the IP header (first 20 bytes)
+        ipHeader = recPacket[:20]
+        iph = struct.unpack("!BBHHHBBH4s4s", ipHeader)
+        ttl = iph[5]  # 6th element is TTL
 
+        # Now extract the ICMP header (next 8 bytes after IP header)
+        icmpHeader = recPacket[20:28]
+        icmp_type, code, received_checksum, packetID, sequence = struct.unpack("bbHHh", icmpHeader)
+
+        # Make sure this is the response to our ping
         if packetID == ID:
             bytesInDouble = struct.calcsize("d")
             timeSent = struct.unpack("d", recPacket[28:28 + bytesInDouble])[0]
             delay = timeReceived - timeSent
-            return f"Reply from {destAddr} in {int(delay*1000)}ms: {len(recPacket)} bytes"
 
-        timeLeft = timeLeft - howLongInSelect
+            return (
+                f"Reply from {destAddr}: "
+                f"bytes={len(recPacket)} "
+                f"time={int(delay * 1000)}ms "
+                f"TTL={ttl} "
+                f"Seq={sequence} "
+                f"Checksum={hex(received_checksum)}"
+            )
+
+        timeLeft -= howLongInSelect
         if timeLeft <= 0:
             return "Request timed out."
 
@@ -67,7 +82,7 @@ def sendOnePing(mySocket, destAddr, ID):
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, myChecksum, ID, 1)
     data = struct.pack("d", time.time())
     # Calculate the checksum on the data and the dummy header.
-    myChecksum = checksum(str(header + data))
+    myChecksum = checksum(header + data)
 
     # Get the right checksum, and put in the header
     if sys.platform == 'darwin':
@@ -108,5 +123,4 @@ def ping(host, timeout=1):
         time.sleep(1) # one second
     return delay
 
-ping("google.com")
-ping("172.217.29.46")
+ping("127.0.0.1")
